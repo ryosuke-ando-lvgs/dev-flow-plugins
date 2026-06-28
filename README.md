@@ -37,8 +37,9 @@
 /plugin update dev-flow@dev-flow-tools
 ```
 
-> このプラグインは commit-SHA 方式でバージョン管理しています。`main` への push（マージ）が
-> そのまま新バージョンになり、`/plugin update` で最新が反映されます（自動CD）。
+> このプラグインは `plugin.json` の `version` を明示して管理しています。**既存ユーザーへ更新を
+> 届けるには version を上げる必要があります**（commit だけでは反映されません）。version を上げ忘れて
+> いないかは CI（`version-check`）が検出します。
 
 ## 使い方
 

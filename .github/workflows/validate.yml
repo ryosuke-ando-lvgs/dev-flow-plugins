@@ -16,3 +16,18 @@ jobs:
           python-version: "3.12"
       - name: Validate plugin structure
         run: python3 scripts/validate.py
+
+  version-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check version bump
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          python3 scripts/version_check.py "origin/${{ github.base_ref }}"
