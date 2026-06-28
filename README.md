@@ -31,6 +31,15 @@
 | `orchestrate` | 上記を順番に実行（各段階で承認） |
 | `loop` | フローや特定段階を停止条件まで反復／定期監視 |
 
+最新版に更新するには:
+
+```text
+/plugin update dev-flow@dev-flow-tools
+```
+
+> このプラグインは commit-SHA 方式でバージョン管理しています。`main` への push（マージ）が
+> そのまま新バージョンになり、`/plugin update` で最新が反映されます（自動CD）。
+
 ## 使い方
 
 一気通貫で回すなら:
