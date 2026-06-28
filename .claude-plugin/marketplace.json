@@ -1,0 +1,13 @@
+{
+  "name": "dev-flow-tools",
+  "description": "開発フロー自動化スキル群のmarketplace",
+  "owner": { "name": "ryosuke ando" },
+  "plugins": [
+    {
+      "name": "dev-flow",
+      "source": "./plugins/dev-flow",
+      "description": "開発フロー自動化スキル群（要件整理〜PR/CI対応）",
+      "version": "0.1.0"
+    }
+  ]
+}
