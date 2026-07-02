@@ -2,7 +2,7 @@
   "name": "dev-flow",
   "displayName": "Dev Flow",
   "description": "要件整理・計画・実装・レビュー・test・PR・CI/コメント対応を一連のスキルで自動化",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": { "name": "ryosuke ando" },
   "license": "MIT",
   "keywords": ["development", "automation", "workflow", "pr", "ci", "review"]
