@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.worxhr.claude-review</string>
+  <string>com.ryosuke-ando-lvgs.claude-review</string>
 
   <key>ProgramArguments</key>
   <array>

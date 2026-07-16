@@ -21,12 +21,13 @@ poll_repo() {
     last_seen="$(jq -r '.last_seen // "1970-01-01T00:00:00Z"' "$state_file")"
   fi
 
-  # issue コメント（PRコメントもここに含まれる）を新しい順に取得し、last_seen より新しいものだけ処理対象にする。
+  # issue コメント（PRコメントもここに含まれる）を取得し、last_seen より新しいものだけ処理対象にする。
+  # `since` で GitHub 側にも絞り込ませ、毎回全履歴を取得しないようにする。
   local comments
   comments="$(gh api "repos/$repo/issues/comments" \
     -X GET \
     --paginate \
-    -f sort=created -f direction=asc \
+    -f sort=created -f direction=asc -f since="$last_seen" \
     --jq '[.[] | select(.issue_url | test("/pull/"))]' 2>/dev/null || echo '[]')"
 
   local count

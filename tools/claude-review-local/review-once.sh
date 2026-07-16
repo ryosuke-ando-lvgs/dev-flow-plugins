@@ -35,7 +35,7 @@ post_status_comment() {
   fi
 }
 
-crl_log "PR #$PR_NUMBER ($REPO) のレビューを開始します（comment_id=$COMMENT_ID）"
+crl_log "PR #${PR_NUMBER} (${REPO}) のレビューを開始します（comment_id=${COMMENT_ID}）"
 post_status_comment "🤖 ローカル Claude がレビュー中です…しばらくお待ちください。"
 
 # --- リポジトリのローカルクローンを最新化 ---
@@ -72,8 +72,8 @@ CLAUDE_EXIT=$?
 set -e
 
 if [ "$CLAUDE_EXIT" -ne 0 ]; then
-  crl_log "claude -p が失敗しました（exit=$CLAUDE_EXIT）"
-  post_status_comment "⚠️ ローカル Claude でのレビューに失敗しました（exit=$CLAUDE_EXIT）。ログを確認してください。"
+  crl_log "claude -p が失敗しました（exit=${CLAUDE_EXIT}）"
+  post_status_comment "⚠️ ローカル Claude でのレビューに失敗しました（exit=${CLAUDE_EXIT}）。ログを確認してください。"
   exit 0
 fi
 
