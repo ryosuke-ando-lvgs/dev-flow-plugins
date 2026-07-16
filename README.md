@@ -56,6 +56,15 @@ CI 失敗や新規コメントに継続対応します（CI green かつ新規�
 
 個別の段階だけ使うこともできます（例 `/dev-flow:ci-fix 123`）。
 
+## ローカルツール
+
+`plugins/` のスキルとは別に、`tools/` 配下には Claude Code セッションの外側で
+動かすローカル常駐ツールを置く。
+
+| tool | 説明 |
+| --- | --- |
+| [claude-review-local](tools/claude-review-local/) | PR に `/review` とコメントすると、ローカルの Claude Code（サブスク認証）がレビューし `gh pr review` で approve/request-changes/comment を返す常駐デーモン |
+
 ## 設計方針
 
 - Git/PR 操作は必ずリモート URL を判定してから `gh`（GitHub）/ `tea`（Gitea）を使い分ける。
