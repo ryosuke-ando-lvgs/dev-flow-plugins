@@ -60,6 +60,14 @@ $EDITOR config.env   # 監視リポ・許可ユーザーなどを設定
 launchctl unload ~/Library/LaunchAgents/com.ryosuke-ando-lvgs.claude-review.plist
 ```
 
+## 自分のPRのレビューについて
+
+GitHub の仕様上、PR作者本人は自分のPRを approve / request-changes できない
+（self-review制限）。そのため自分の `gh` 認証で実行する限り、**自分のPRに対しては
+常に `--comment` が使われる**（`review-prompt.md` の指示で自動フォールバック）。
+approve / request-changes が欲しいのは他人のPR、または別アカウント・bot が
+作成したPRの場合のみ。
+
 ## 課金について
 
 `claude -p` はヘッドレス実行だが、このツールは `ANTHROPIC_API_KEY` を明示的に
