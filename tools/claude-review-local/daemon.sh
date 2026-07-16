@@ -71,12 +71,17 @@ poll_global() {
       fi
 
       crl_log "トリガー検知: repo=$repo pr=$pr_number author=$author comment_id=$comment_id"
-      if "$CRL_DIR/review-once.sh" "$repo" "$pr_number" "$comment_id"; then
-        crl_mark_processed "$GLOBAL_STATE_FILE" "$comment_id" "$created_at"
-      else
-        crl_log "review-once.sh が失敗しました (repo=$repo pr=$pr_number)。次回もリトライ対象にはせず処理済みにします。"
-        crl_mark_processed "$GLOBAL_STATE_FILE" "$comment_id" "$created_at"
-      fi
+      # 成功・失敗どちらでも二重処理防止のため先に処理済みにし、実行はバックグラウンドで並列化する。
+      # 同一リポジトリの同時実行は review-once.sh 側のロックで直列化される。
+      crl_mark_processed "$GLOBAL_STATE_FILE" "$comment_id" "$created_at"
+
+      while [ "$(jobs -rp | wc -l)" -ge "$CLAUDE_REVIEW_MAX_PARALLEL" ]; do
+        wait -n 2>/dev/null || sleep 1
+      done
+      (
+        "$CRL_DIR/review-once.sh" "$repo" "$pr_number" "$comment_id" \
+          || crl_log "review-once.sh が失敗しました (repo=$repo pr=$pr_number)"
+      ) &
     done
   done
 }

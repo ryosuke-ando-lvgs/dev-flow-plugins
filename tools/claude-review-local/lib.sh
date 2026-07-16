@@ -20,6 +20,7 @@ crl_load_config() {
   : "${CLAUDE_REVIEW_WORKDIR:=$HOME/.claude-review-local/repos}"
   : "${CLAUDE_REVIEW_STATE_DIR:=$HOME/.claude-review-local}"
   : "${CLAUDE_REVIEW_CLAUDE_BIN:=claude}"
+  : "${CLAUDE_REVIEW_MAX_PARALLEL:=3}"
 
   mkdir -p "$CLAUDE_REVIEW_WORKDIR" "$CLAUDE_REVIEW_STATE_DIR"
 
