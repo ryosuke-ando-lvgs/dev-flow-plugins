@@ -163,6 +163,13 @@ if [ "$REVIEW_EXIT" -ne 0 ]; then
   exit 0
 fi
 
+ACTION_LABEL="コメント"
+case "$REVIEW_ACTION" in
+  approve) ACTION_LABEL="Approve" ;;
+  request-changes) ACTION_LABEL="Request changes" ;;
+  comment) ACTION_LABEL="コメント" ;;
+esac
+
 set_trigger_reaction "+1"
-post_status_comment "✅ ローカル Claude によるレビューが完了しました。"
-crl_log "PR #$PR_NUMBER のレビューが完了しました"
+post_status_comment "✅ ローカル Claude によるレビューが完了しました（${ACTION_LABEL}）。詳細は上記の Review を確認してください。"
+crl_log "PR #$PR_NUMBER のレビューが完了しました（action=${REVIEW_ACTION}）"
