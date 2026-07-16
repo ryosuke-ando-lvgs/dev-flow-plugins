@@ -44,7 +44,14 @@ $EDITOR config.env   # 許可ユーザーなどを設定
 ```
 
 起動した状態で、対象PRに `/review` とコメントすると、次のポーリングで検知され、
-`claude -p` によるレビュー後に `gh pr review` が実行される。
+レビューが実行される。
+
+`claude -p` にはPRのタイトル・本文・diffをテキストとして渡し、`gh`/`git` コマンドの
+実行権限は一切与えない（`Read`/`Grep`/`Glob` のみ許可し、ローカルにチェックアウト済みの
+コードを参照させることはできる）。claude は `ACTION: approve|comment|request-changes`
+＋レビュー本文というテキストを返すだけで、実際の `gh pr review` 投稿は
+`review-once.sh` 自身が行う。これにより、claude が確認待ち状態で停止して
+「実行したふりをして exit 0 する」問題が構造的に起こらないようにしている。
 
 ## 常駐化（launchd）
 
