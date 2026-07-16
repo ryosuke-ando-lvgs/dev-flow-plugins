@@ -14,7 +14,6 @@ crl_load_config() {
   # shellcheck disable=SC1090
   source "$config_file"
 
-  : "${CLAUDE_REVIEW_REPOS:?CLAUDE_REVIEW_REPOS が未設定です}"
   : "${CLAUDE_REVIEW_ALLOWED_USERS:?CLAUDE_REVIEW_ALLOWED_USERS が未設定です}"
   : "${CLAUDE_REVIEW_TRIGGER:=/review}"
   : "${CLAUDE_REVIEW_POLL_INTERVAL:=90}"

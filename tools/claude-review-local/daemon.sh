@@ -9,73 +9,79 @@ source "$CRL_DIR/lib.sh"
 
 crl_load_config
 
-crl_log "claude-review-local daemon 起動 (repos: $CLAUDE_REVIEW_REPOS / interval: ${CLAUDE_REVIEW_POLL_INTERVAL}s)"
+crl_log "claude-review-local daemon 起動 (全リポ横断検索モード / allowed_users: $CLAUDE_REVIEW_ALLOWED_USERS / interval: ${CLAUDE_REVIEW_POLL_INTERVAL}s)"
 
-poll_repo() {
-  local repo="$1"
-  local state_file
-  state_file="$(crl_state_file "$repo")"
+GLOBAL_STATE_FILE="$CLAUDE_REVIEW_STATE_DIR/state-global.json"
 
+# 自分（許可ユーザー）が /review とコメントした PR を、リポジトリを問わず
+# GitHub Search API (`in:comments` + `commenter:`) で横断検索する。
+# 静的なリポジトリリストを持たないため、閲覧可能などのリポでも動く。
+poll_global() {
   local last_seen="1970-01-01T00:00:00Z"
-  if [ -f "$state_file" ]; then
-    last_seen="$(jq -r '.last_seen // "1970-01-01T00:00:00Z"' "$state_file")"
+  if [ -f "$GLOBAL_STATE_FILE" ]; then
+    last_seen="$(jq -r '.last_seen // "1970-01-01T00:00:00Z"' "$GLOBAL_STATE_FILE")"
   fi
 
-  # issue コメント（PRコメントもここに含まれる）を取得し、last_seen より新しいものだけ処理対象にする。
-  # `since` で GitHub 側にも絞り込ませ、毎回全履歴を取得しないようにする。
-  local comments
-  comments="$(gh api "repos/$repo/issues/comments" \
-    -X GET \
-    --paginate \
-    -f sort=created -f direction=asc -f since="$last_seen" \
-    --jq '[.[] | select(.issue_url | test("/pull/"))]' 2>/dev/null || echo '[]')"
+  local allowed commenter_q issues
+  commenter_q=""
+  for allowed in $CLAUDE_REVIEW_ALLOWED_USERS; do
+    commenter_q="$commenter_q commenter:$allowed"
+  done
+
+  issues="$(gh api search/issues -X GET --paginate \
+    -f q="$CLAUDE_REVIEW_TRIGGER in:comments is:pr$commenter_q" \
+    --jq '[.items[] | {repo: (.repository_url | sub(".*/repos/"; "")), number}]' 2>/dev/null || echo '[]')"
 
   local count
-  count="$(echo "$comments" | jq 'length')"
+  count="$(echo "$issues" | jq 'length')"
   local i=0
   while [ "$i" -lt "$count" ]; do
-    local c created_at comment_id author body pr_number
-    c="$(echo "$comments" | jq -c ".[$i]")"
-    created_at="$(echo "$c" | jq -r '.created_at')"
-    comment_id="$(echo "$c" | jq -r '.id')"
-    author="$(echo "$c" | jq -r '.user.login')"
-    body="$(echo "$c" | jq -r '.body')"
-    pr_number="$(echo "$c" | jq -r '.issue_url' | sed -E 's#.*/pull/([0-9]+)$#\1#')"
+    local item repo pr_number
+    item="$(echo "$issues" | jq -c ".[$i]")"
+    repo="$(echo "$item" | jq -r '.repo')"
+    pr_number="$(echo "$item" | jq -r '.number')"
     i=$((i + 1))
 
-    # last_seen 以前はスキップ
-    if [[ "$created_at" < "$last_seen" || "$created_at" == "$last_seen" ]]; then
-      continue
-    fi
+    # 検索結果のPR単位から、実際の該当コメントを取り直して created_at / author を確定する。
+    local comments c_count j
+    comments="$(gh api "repos/$repo/issues/$pr_number/comments" -X GET --paginate \
+      -f since="$last_seen" \
+      --jq "[.[] | select(.body | startswith(\"$CLAUDE_REVIEW_TRIGGER\"))]" 2>/dev/null || echo '[]')"
+    c_count="$(echo "$comments" | jq 'length')"
+    j=0
+    while [ "$j" -lt "$c_count" ]; do
+      local c created_at comment_id author
+      c="$(echo "$comments" | jq -c ".[$j]")"
+      created_at="$(echo "$c" | jq -r '.created_at')"
+      comment_id="$(echo "$c" | jq -r '.id')"
+      author="$(echo "$c" | jq -r '.user.login')"
+      j=$((j + 1))
 
-    if crl_is_processed "$state_file" "$comment_id"; then
-      continue
-    fi
+      if [[ "$created_at" < "$last_seen" || "$created_at" == "$last_seen" ]]; then
+        continue
+      fi
 
-    if [[ "$body" != "$CLAUDE_REVIEW_TRIGGER"* ]]; then
-      crl_mark_processed "$state_file" "$comment_id" "$created_at"
-      continue
-    fi
+      if crl_is_processed "$GLOBAL_STATE_FILE" "$comment_id"; then
+        continue
+      fi
 
-    if ! crl_is_allowed_user "$author"; then
-      crl_log "許可されていないユーザーからの $CLAUDE_REVIEW_TRIGGER をスキップ: $author (repo=$repo, pr=$pr_number)"
-      crl_mark_processed "$state_file" "$comment_id" "$created_at"
-      continue
-    fi
+      if ! crl_is_allowed_user "$author"; then
+        crl_mark_processed "$GLOBAL_STATE_FILE" "$comment_id" "$created_at"
+        continue
+      fi
 
-    crl_log "トリガー検知: repo=$repo pr=$pr_number author=$author comment_id=$comment_id"
-    if "$CRL_DIR/review-once.sh" "$repo" "$pr_number" "$comment_id"; then
-      crl_mark_processed "$state_file" "$comment_id" "$created_at"
-    else
-      crl_log "review-once.sh が失敗しました (repo=$repo pr=$pr_number)。次回もリトライ対象にはせず処理済みにします。"
-      crl_mark_processed "$state_file" "$comment_id" "$created_at"
-    fi
+      crl_log "トリガー検知: repo=$repo pr=$pr_number author=$author comment_id=$comment_id"
+      if "$CRL_DIR/review-once.sh" "$repo" "$pr_number" "$comment_id"; then
+        crl_mark_processed "$GLOBAL_STATE_FILE" "$comment_id" "$created_at"
+      else
+        crl_log "review-once.sh が失敗しました (repo=$repo pr=$pr_number)。次回もリトライ対象にはせず処理済みにします。"
+        crl_mark_processed "$GLOBAL_STATE_FILE" "$comment_id" "$created_at"
+      fi
+    done
   done
 }
 
 while true; do
-  for repo in $CLAUDE_REVIEW_REPOS; do
-    poll_repo "$repo" || crl_log "poll_repo($repo) でエラーが発生しましたが継続します"
-  done
+  poll_global || crl_log "poll_global でエラーが発生しましたが継続します"
   sleep "$CLAUDE_REVIEW_POLL_INTERVAL"
 done

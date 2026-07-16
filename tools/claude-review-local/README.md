@@ -3,6 +3,9 @@
 PR に `/review` とコメントすると、**自分のマシン上の Claude Code**（サブスク認証）が
 そのPRをレビューし、review bot のように `gh pr review` で
 approve / request-changes / comment を返すローカル常駐ツール。
+監視対象リポジトリの固定リストは持たず、GitHub Search API で
+「自分（`CLAUDE_REVIEW_ALLOWED_USERS`）が `/review` とコメントした全PR」を
+リポジトリ横断で検索するため、閲覧可能などのリポでもそのまま動く。
 
 `dev-flow` の各スキル（`/dev-flow:*`）は Claude Code セッション内で明示的に呼び出す
 ものだが、これは GitHub 側の PR コメントをトリガーに**外部から**自律的に動く常駐
@@ -22,15 +25,14 @@ GitHub Actions のクラウド実行（`claude-code-action` 等）だと Anthrop
 ```bash
 cd tools/claude-review-local
 cp config.example.env config.env
-$EDITOR config.env   # 監視リポ・許可ユーザーなどを設定
+$EDITOR config.env   # 許可ユーザーなどを設定
 ```
 
 `config.env` の主な項目:
 
 | 変数 | 説明 |
 | --- | --- |
-| `CLAUDE_REVIEW_REPOS` | 監視する `owner/repo` （スペース区切りで複数可） |
-| `CLAUDE_REVIEW_ALLOWED_USERS` | `/review` を実行してよいGitHubログイン名 |
+| `CLAUDE_REVIEW_ALLOWED_USERS` | `/review` を実行してよいGitHubログイン名（Search API の `commenter:` フィルタにも使う） |
 | `CLAUDE_REVIEW_TRIGGER` | トリガー文字列（既定 `/review`） |
 | `CLAUDE_REVIEW_POLL_INTERVAL` | ポーリング間隔（秒） |
 | `CLAUDE_REVIEW_WORKDIR` | リポジトリのローカルクローン置き場 |
@@ -76,7 +78,7 @@ unset してから起動する（`lib.sh` の `crl_load_config`）。これに�
 
 ## 冪等性・安全策
 
-- 処理済みコメントIDと `last_seen` を `~/.claude-review-local/state-<owner>__<repo>.json`
+- 処理済みコメントIDと `last_seen` を `~/.claude-review-local/state-global.json`
   に記録し、同一コメントを二重処理しない。
 - `/review` を実行できるのは `CLAUDE_REVIEW_ALLOWED_USERS` に列挙したユーザーのみ。
 - レビュー中・完了時に `<!-- claude-review-local -->` マーカー付きコメントを
