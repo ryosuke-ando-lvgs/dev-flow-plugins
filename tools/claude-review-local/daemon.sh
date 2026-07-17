@@ -26,8 +26,10 @@ poll_global() {
   local allowed
   for allowed in $CLAUDE_REVIEW_ALLOWED_USERS; do
     local events count i
+    # gh api --paginate はページごとに --jq を適用するため、結果はページ数分の
+    # JSON配列が改行区切りで並ぶ。jq -s add で1つの配列にまとめてから扱う。
     events="$(gh api "users/$allowed/events" -X GET --paginate \
-      --jq '[.[] | select(.type=="IssueCommentEvent" and .payload.issue.pull_request != null and (.payload.comment.body | sub("^[\r\n]+"; "") | startswith("'"$CLAUDE_REVIEW_TRIGGER"'"))) | {repo: .repo.name, number: .payload.issue.number, comment_id: .payload.comment.id, created_at: .payload.comment.created_at, author: .actor.login}]' 2>/dev/null || echo '[]')"
+      --jq '[.[] | select(.type=="IssueCommentEvent" and .payload.issue.pull_request != null and (.payload.comment.body | sub("^[\r\n]+"; "") | startswith("'"$CLAUDE_REVIEW_TRIGGER"'"))) | {repo: .repo.name, number: .payload.issue.number, comment_id: .payload.comment.id, created_at: .payload.comment.created_at, author: .actor.login}]' 2>/dev/null | jq -s 'add' || echo '[]')"
 
     count="$(echo "$events" | jq 'length')"
     i=0
