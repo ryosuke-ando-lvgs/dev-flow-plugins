@@ -71,6 +71,14 @@ $EDITOR config.env   # 許可ユーザーなどを設定
 launchctl unload ~/Library/LaunchAgents/com.ryosuke-ando-lvgs.claude-review.plist
 ```
 
+## レビュー観点のカスタマイズ
+
+`checklists/*.md` に置いたファイルが、ファイル名の昇順で `review-prompt.md` の
+`{{CHECKLISTS}}` に連結して埋め込まれる。観点を追加・変更したい場合は、この
+ディレクトリにMarkdownファイルを追加・編集するだけでよい（`review-once.sh`や
+`review-prompt.md`自体の変更は不要）。ファイル名先頭の数字（`00-`, `10-`, `20-`...）
+は表示順の制御用。
+
 ## 自分のPRのレビューについて
 
 GitHub の仕様上、PR作者本人は自分のPRを approve / request-changes できない

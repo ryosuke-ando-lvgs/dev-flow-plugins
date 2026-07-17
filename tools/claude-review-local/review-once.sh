@@ -92,12 +92,17 @@ PROMPT_FILE="$(mktemp)"
 
 OWNER="$OWNER" NAME="$NAME" PR_NUMBER="$PR_NUMBER" PR_TITLE="$PR_TITLE" PR_BODY="$PR_BODY" PR_DIFF="$PR_DIFF" \
   TEMPLATE_PATH="$CRL_DIR/review-prompt.md" OUTPUT_PATH="$PROMPT_FILE" \
+  CHECKLISTS_DIR="$CRL_DIR/checklists" \
   python3 -c '
+import glob
 import os
 template = open(os.environ["TEMPLATE_PATH"]).read()
+checklist_files = sorted(glob.glob(os.path.join(os.environ["CHECKLISTS_DIR"], "*.md")))
+checklists = "\n\n".join(open(f).read().strip() for f in checklist_files)
 for key in ["OWNER", "REPO", "PR_NUMBER", "PR_TITLE", "PR_BODY", "PR_DIFF"]:
     env_key = "NAME" if key == "REPO" else key
     template = template.replace("{{" + key + "}}", os.environ.get(env_key, ""))
+template = template.replace("{{CHECKLISTS}}", checklists)
 open(os.environ["OUTPUT_PATH"], "w").write(template)
 '
 
