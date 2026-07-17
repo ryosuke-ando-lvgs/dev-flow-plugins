@@ -49,8 +49,10 @@ $EDITOR config.env   # 許可ユーザーなどを設定
 レビューが実行される。
 
 `claude -p` にはPRのタイトル・本文・diffをテキストとして渡し、`gh`/`git` コマンドの
-実行権限は一切与えない（`Read`/`Grep`/`Glob` のみ許可し、ローカルにチェックアウト済みの
-コードを参照させることはできる）。claude は `ACTION: approve|comment|request-changes`
+実行権限は一切与えない。`Read`/`Grep`/`Glob`でローカルにチェックアウト済みのコードを
+参照でき、加えて依存パッケージ更新PRのレビューでリリースノート/CHANGELOGを調べられる
+よう`WebFetch`/`WebSearch`も許可している（いずれも読み取り専用でコマンド実行権限では
+ない）。claude は `ACTION: approve|comment|request-changes`
 ＋レビュー本文というテキストを返すだけで、実際の `gh pr review` 投稿は
 `review-once.sh` 自身が行う。これにより、claude が確認待ち状態で停止して
 「実行したふりをして exit 0 する」問題が構造的に起こらないようにしている。
