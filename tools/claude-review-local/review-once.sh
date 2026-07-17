@@ -24,7 +24,7 @@ REPO_DIR="$CLAUDE_REVIEW_WORKDIR/$REPO_SLUG"
 # 同一リポジトリの並列実行はローカルクローン(REPO_DIR)を共有するため、
 # git checkout 等が競合しないようリポジトリ単位で直列化する（別リポは並列可）。
 REPO_LOCK="$(crl_acquire_repo_lock "$REPO_SLUG")"
-trap 'rmdir "$REPO_LOCK" 2>/dev/null || true; rm -f "${PROMPT_FILE:-}" "${REVIEW_PAYLOAD_FILE:-}" "${REVIEW_ERR_FILE:-}" 2>/dev/null || true' EXIT
+trap 'rmdir "$REPO_LOCK" 2>/dev/null || true; rm -f "${PROMPT_FILE:-}" "${REVIEW_PAYLOAD_FILE:-}" "${REVIEW_ERR_FILE:-}" "${PARSE_RESULT_FILE:-}" 2>/dev/null || true' EXIT
 
 post_status_comment() { crl_post_status_comment "$REPO" "$PR_NUMBER" "$1"; }
 set_trigger_reaction() { crl_set_trigger_reaction "$REPO" "$COMMENT_ID" "$1"; }
@@ -105,47 +105,61 @@ if [ "$CLAUDE_EXIT" -ne 0 ]; then
   exit 0
 fi
 
-REVIEW_ACTION="$(echo "$CLAUDE_OUTPUT" | grep -m1 -oE 'ACTION:[[:space:]]*(approve|comment|request-changes)' | sed -E 's/ACTION:[[:space:]]*//')"
-# FINDINGS_JSON はテンプレート側の指示で `---` より前（本文の外）に出力させているが、
-# LLMの出力が必ずしも指示順序どおりとは限らないため、念のため本文側にも
-# `## FINDINGS_JSON` 以降を切り落とす防御的な処理を残す。
-REVIEW_BODY="$(echo "$CLAUDE_OUTPUT" | sed -n '/^---$/,$p' | tail -n +2 | sed '/^##[[:space:]]*FINDINGS_JSON/,$d')"
-
-if [ -z "$REVIEW_ACTION" ] || [ -z "$REVIEW_BODY" ]; then
-  crl_log "claude -p の出力からACTION/本文を解析できませんでした: $CLAUDE_OUTPUT"
-  set_trigger_reaction "confused"
-  post_status_comment "⚠️ ローカル Claude の出力形式が不正でレビューを解析できませんでした。ログを確認してください。"
-  exit 0
-fi
-
-GH_EVENT="COMMENT"
-case "$REVIEW_ACTION" in
-  approve) GH_EVENT="APPROVE" ;;
-  request-changes) GH_EVENT="REQUEST_CHANGES" ;;
-  comment) GH_EVENT="COMMENT" ;;
-esac
-
 HEAD_SHA="$(cd "$REPO_DIR" && git rev-parse HEAD)"
 
-# --- claudeの出力に含まれるFINDINGS_JSONブロックをdiffと突き合わせて検証し、
-#     GitHub Reviews APIの comments（インライン行コメント）として使えるものだけを
-#     抽出する。diffの変更範囲外の行はGitHub側が拒否するため、有効な行のみ残す。 ---
+# --- claudeの出力（```json フェンス付きの単一JSONオブジェクト: action/body/findings）
+#     をパースし、findingsをdiffと突き合わせて検証した上で、GitHub Reviews APIの
+#     payload（commit_id/event/body/comments）を組み立てる。
+#     diffの変更範囲外の行はGitHub側が拒否するため、有効な行のみ comments に残す。 ---
 REVIEW_PAYLOAD_FILE="$(mktemp)"
-DROPPED_COUNT="$(PR_DIFF="$PR_DIFF" REVIEW_BODY="$REVIEW_BODY" GH_EVENT="$GH_EVENT" \
-  CLAUDE_OUTPUT="$CLAUDE_OUTPUT" HEAD_SHA="$HEAD_SHA" OUTPUT_PATH="$REVIEW_PAYLOAD_FILE" \
+PARSE_RESULT_FILE="$(mktemp)"
+PR_DIFF="$PR_DIFF" CLAUDE_OUTPUT="$CLAUDE_OUTPUT" HEAD_SHA="$HEAD_SHA" \
+  OUTPUT_PATH="$REVIEW_PAYLOAD_FILE" RESULT_PATH="$PARSE_RESULT_FILE" \
   python3 -c '
 import json
 import os
 import re
+
+
+def fail(reason):
+    with open(os.environ["RESULT_PATH"], "w") as fh:
+        fh.write("PARSE_ERROR\n" + reason)
+    raise SystemExit(0)
+
+
+claude_output = os.environ["CLAUDE_OUTPUT"]
+m = re.search(r"```json\s*(\{.*\})\s*```", claude_output, re.DOTALL)
+if not m:
+    fail("```json フェンス付きのJSONブロックが見つかりません")
+
+try:
+    data = json.loads(m.group(1))
+except Exception as e:
+    fail(f"JSONのパースに失敗しました: {e}")
+
+if not isinstance(data, dict):
+    fail("JSONのトップレベルがオブジェクトではありません")
+
+action = data.get("action")
+body = data.get("body")
+findings = data.get("findings", [])
+
+event_map = {"approve": "APPROVE", "request-changes": "REQUEST_CHANGES", "comment": "COMMENT"}
+if action not in event_map:
+    fail(f"actionの値が不正です: {action!r}")
+if not isinstance(body, str) or not body.strip():
+    fail("bodyが空です")
+if not isinstance(findings, list):
+    findings = []
 
 diff_text = os.environ["PR_DIFF"]
 valid_lines = {}
 current_path = None
 new_line = None
 for line in diff_text.splitlines():
-    m = re.match(r"^\+\+\+ (.+)$", line)
-    if m:
-        target = m.group(1)
+    dm = re.match(r"^\+\+\+ (.+)$", line)
+    if dm:
+        target = dm.group(1)
         if target == "/dev/null":
             current_path = None
         else:
@@ -153,9 +167,9 @@ for line in diff_text.splitlines():
             valid_lines.setdefault(current_path, set())
         new_line = None
         continue
-    m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
-    if m:
-        new_line = int(m.group(1))
+    hm = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+    if hm:
+        new_line = int(hm.group(1))
         continue
     if current_path is None or new_line is None:
         continue
@@ -169,18 +183,9 @@ for line in diff_text.splitlines():
         pass
     # "\\ No newline..." 等は行番号に影響しないため無視する
 
-claude_output = os.environ["CLAUDE_OUTPUT"]
-m = re.search(r"FINDINGS_JSON\s*```json\s*(\[.*?\])\s*```", claude_output, re.DOTALL)
-findings = []
-if m:
-    try:
-        findings = json.loads(m.group(1))
-    except Exception:
-        findings = []
-
 comments = []
 dropped = 0
-for f in findings if isinstance(findings, list) else []:
+for f in findings:
     if not isinstance(f, dict):
         dropped += 1
         continue
@@ -196,18 +201,34 @@ for f in findings if isinstance(findings, list) else []:
 
 payload = {
     "commit_id": os.environ["HEAD_SHA"],
-    "event": os.environ["GH_EVENT"],
-    "body": os.environ["REVIEW_BODY"],
+    "event": event_map[action],
+    "body": body,
     "comments": comments,
 }
 with open(os.environ["OUTPUT_PATH"], "w") as fh:
     json.dump(payload, fh)
 
-print(dropped)
-')"
+with open(os.environ["RESULT_PATH"], "w") as fh:
+    fh.write(f"OK\n{action}\n{event_map[action]}\n{dropped}")
+'
+
+PARSE_STATUS="$(sed -n '1p' "$PARSE_RESULT_FILE")"
+if [ "$PARSE_STATUS" != "OK" ]; then
+  PARSE_REASON="$(tail -n +2 "$PARSE_RESULT_FILE")"
+  crl_log "claude -p の出力をJSONとして解析できませんでした（${PARSE_REASON}）: $CLAUDE_OUTPUT"
+  rm -f "$PARSE_RESULT_FILE" "$REVIEW_PAYLOAD_FILE" 2>/dev/null || true
+  set_trigger_reaction "confused"
+  post_status_comment "⚠️ ローカル Claude の出力形式が不正でレビューを解析できませんでした。ログを確認してください。"
+  exit 0
+fi
+
+REVIEW_ACTION="$(sed -n '2p' "$PARSE_RESULT_FILE")"
+GH_EVENT="$(sed -n '3p' "$PARSE_RESULT_FILE")"
+DROPPED_COUNT="$(sed -n '4p' "$PARSE_RESULT_FILE")"
+rm -f "$PARSE_RESULT_FILE" 2>/dev/null || true
 
 if [ "${DROPPED_COUNT:-0}" -gt 0 ] 2>/dev/null; then
-  crl_log "FINDINGS_JSONのうちdiff範囲外/不正な${DROPPED_COUNT}件はインラインコメントをスキップしました"
+  crl_log "findingsのうちdiff範囲外/不正な${DROPPED_COUNT}件はインラインコメントをスキップしました"
 fi
 
 # --- 実際のレビュー投稿（総評＋インライン行コメント）はこのスクリプトが
