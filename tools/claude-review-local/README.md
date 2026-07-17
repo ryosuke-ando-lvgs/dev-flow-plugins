@@ -53,17 +53,18 @@ $EDITOR config.env   # 許可ユーザーなどを設定
 実行権限は一切与えない。`Read`/`Grep`/`Glob`でローカルにチェックアウト済みのコードを
 参照でき、加えて依存パッケージ更新PRのレビューでリリースノート/CHANGELOGを調べられる
 よう`WebFetch`/`WebSearch`も許可している（いずれも読み取り専用でコマンド実行権限では
-ない）。claude は `ACTION: approve|comment|request-changes` ＋レビュー本文（総評含む）
-＋ファイル:行に紐づく指摘一覧（`FINDINGS_JSON`）というテキストを返すだけで、実際の
-GitHub への投稿は `review-once.sh` 自身が GitHub Reviews API
-（`gh api .../pulls/.../reviews`）経由で行う。これにより、claude が確認待ち状態で
-停止して「実行したふりをして exit 0 する」問題が構造的に起こらないようにしている。
+ない）。claude は `{"action": "approve|comment|request-changes", "body": "<総評Markdown>",
+"findings": [{"file", "line", "severity", "message"}, ...]}` という単一のJSONオブジェクト
+（```json フェンス付き）だけを返し、実際のGitHubへの投稿は `review-once.sh` 自身が
+GitHub Reviews API（`gh api .../pulls/.../reviews`）経由で行う。これにより、claude が
+確認待ち状態で停止して「実行したふりをして exit 0 する」問題が構造的に起こらないように
+している。
 
-レビューは GitHub 標準の Review UI として投稿され、総評・ACTION を含む
-トップレベルの本文コメントと、`FINDINGS_JSON` のうち diff の変更範囲内に収まる
-指摘だけをインラインの行コメントとして各行に付ける。diff範囲外などGitHubが
-受理できない指摘は自動的に除外し（トップレベル本文には元々含まれているため
-内容が失われることはない）、除外件数はログに記録される。
+レビューは GitHub 標準の Review UI として投稿され、`body` を総評としてトップレベルの
+本文コメントに、`findings` のうち diff の変更範囲内に収まる指摘だけをインラインの
+行コメントとして各行に付ける。diff範囲外などGitHubが受理できない指摘は自動的に除外し
+（トップレベル本文には元々含まれないため内容が失われることはない）、除外件数はログに
+記録される。
 
 ## Issue本文の自動埋め込み（`/fill`）
 
@@ -139,7 +140,7 @@ unset してから起動する（`lib.sh` の `crl_load_config`）。これに�
 
 ## 既知の制約
 
-- claude が `ACTION:` 形式に従わない/解析できない出力を返すケースが稀にありうる。
+- claude が指定のJSON形式に従わない/解析できない出力を返すケースが稀にありうる。
   その場合はステータスコメントに解析失敗が明記されるので、ログ（`daemon.log`）を
   確認すること。
 - Events API は許可ユーザー本人の直近の公開activity（ページネーションを含め
