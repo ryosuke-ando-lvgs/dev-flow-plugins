@@ -52,10 +52,17 @@ $EDITOR config.env   # 許可ユーザーなどを設定
 実行権限は一切与えない。`Read`/`Grep`/`Glob`でローカルにチェックアウト済みのコードを
 参照でき、加えて依存パッケージ更新PRのレビューでリリースノート/CHANGELOGを調べられる
 よう`WebFetch`/`WebSearch`も許可している（いずれも読み取り専用でコマンド実行権限では
-ない）。claude は `ACTION: approve|comment|request-changes`
-＋レビュー本文というテキストを返すだけで、実際の `gh pr review` 投稿は
-`review-once.sh` 自身が行う。これにより、claude が確認待ち状態で停止して
-「実行したふりをして exit 0 する」問題が構造的に起こらないようにしている。
+ない）。claude は `ACTION: approve|comment|request-changes` ＋レビュー本文（総評含む）
+＋ファイル:行に紐づく指摘一覧（`FINDINGS_JSON`）というテキストを返すだけで、実際の
+GitHub への投稿は `review-once.sh` 自身が GitHub Reviews API
+（`gh api .../pulls/.../reviews`）経由で行う。これにより、claude が確認待ち状態で
+停止して「実行したふりをして exit 0 する」問題が構造的に起こらないようにしている。
+
+レビューは GitHub 標準の Review UI として投稿され、総評・ACTION を含む
+トップレベルの本文コメントと、`FINDINGS_JSON` のうち diff の変更範囲内に収まる
+指摘だけをインラインの行コメントとして各行に付ける。diff範囲外などGitHubが
+受理できない指摘は自動的に除外し（トップレベル本文には元々含まれているため
+内容が失われることはない）、除外件数はログに記録される。
 
 ## 常駐化（launchd）
 

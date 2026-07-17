@@ -31,7 +31,7 @@ REPO_LOCK="$LOCK_DIR/${REPO_SLUG}.lock"
 while ! mkdir "$REPO_LOCK" 2>/dev/null; do
   sleep 2
 done
-trap 'rmdir "$REPO_LOCK" 2>/dev/null || true; rm -f "${PROMPT_FILE:-}" 2>/dev/null || true' EXIT
+trap 'rmdir "$REPO_LOCK" 2>/dev/null || true; rm -f "${PROMPT_FILE:-}" "${REVIEW_PAYLOAD_FILE:-}" "${REVIEW_ERR_FILE:-}" 2>/dev/null || true' EXIT
 
 post_status_comment() {
   local body="$1"
@@ -149,33 +149,139 @@ if [ -z "$REVIEW_ACTION" ] || [ -z "$REVIEW_BODY" ]; then
   exit 0
 fi
 
-GH_FLAG="--comment"
+GH_EVENT="COMMENT"
 case "$REVIEW_ACTION" in
-  approve) GH_FLAG="--approve" ;;
-  request-changes) GH_FLAG="--request-changes" ;;
-  comment) GH_FLAG="--comment" ;;
+  approve) GH_EVENT="APPROVE" ;;
+  request-changes) GH_EVENT="REQUEST_CHANGES" ;;
+  comment) GH_EVENT="COMMENT" ;;
 esac
 
-# --- 実際のレビュー投稿はこのスクリプト（gh pr review）が行う ---
+HEAD_SHA="$(cd "$REPO_DIR" && git rev-parse HEAD)"
+
+# --- claudeの出力に含まれるFINDINGS_JSONブロックをdiffと突き合わせて検証し、
+#     GitHub Reviews APIの comments（インライン行コメント）として使えるものだけを
+#     抽出する。diffの変更範囲外の行はGitHub側が拒否するため、有効な行のみ残す。 ---
+REVIEW_PAYLOAD_FILE="$(mktemp)"
+DROPPED_COUNT="$(PR_DIFF="$PR_DIFF" REVIEW_BODY="$REVIEW_BODY" GH_EVENT="$GH_EVENT" \
+  CLAUDE_OUTPUT="$CLAUDE_OUTPUT" HEAD_SHA="$HEAD_SHA" OUTPUT_PATH="$REVIEW_PAYLOAD_FILE" \
+  python3 -c '
+import json
+import os
+import re
+
+diff_text = os.environ["PR_DIFF"]
+valid_lines = {}
+current_path = None
+new_line = None
+for line in diff_text.splitlines():
+    m = re.match(r"^\+\+\+ (.+)$", line)
+    if m:
+        target = m.group(1)
+        if target == "/dev/null":
+            current_path = None
+        else:
+            current_path = re.sub(r"^b/", "", target)
+            valid_lines.setdefault(current_path, set())
+        new_line = None
+        continue
+    m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+    if m:
+        new_line = int(m.group(1))
+        continue
+    if current_path is None or new_line is None:
+        continue
+    if line.startswith("+"):
+        valid_lines[current_path].add(new_line)
+        new_line += 1
+    elif line.startswith(" "):
+        valid_lines[current_path].add(new_line)
+        new_line += 1
+    elif line.startswith("-"):
+        pass
+    # "\\ No newline..." 等は行番号に影響しないため無視する
+
+claude_output = os.environ["CLAUDE_OUTPUT"]
+m = re.search(r"FINDINGS_JSON\s*```json\s*(\[.*?\])\s*```", claude_output, re.DOTALL)
+findings = []
+if m:
+    try:
+        findings = json.loads(m.group(1))
+    except Exception:
+        findings = []
+
+comments = []
+dropped = 0
+for f in findings if isinstance(findings, list) else []:
+    if not isinstance(f, dict):
+        dropped += 1
+        continue
+    path = f.get("file")
+    line_no = f.get("line")
+    severity = f.get("severity", "")
+    message = f.get("message", "")
+    if not path or not isinstance(line_no, int) or path not in valid_lines or line_no not in valid_lines[path]:
+        dropped += 1
+        continue
+    tag = f"**[{severity}]** " if severity else ""
+    comments.append({"path": path, "line": line_no, "side": "RIGHT", "body": f"{tag}{message}"})
+
+payload = {
+    "commit_id": os.environ["HEAD_SHA"],
+    "event": os.environ["GH_EVENT"],
+    "body": os.environ["REVIEW_BODY"],
+    "comments": comments,
+}
+with open(os.environ["OUTPUT_PATH"], "w") as fh:
+    json.dump(payload, fh)
+
+print(dropped)
+')"
+
+if [ "${DROPPED_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+  crl_log "FINDINGS_JSONのうちdiff範囲外/不正な${DROPPED_COUNT}件はインラインコメントをスキップしました"
+fi
+
+# --- 実際のレビュー投稿（総評＋インライン行コメント）はこのスクリプトが
+#     GitHub Reviews API（gh api .../pulls/.../reviews）で行う ---
 REVIEW_ERR_FILE="$(mktemp)"
 set +e
-gh pr review "$PR_NUMBER" --repo "$REPO" $GH_FLAG -b "$REVIEW_BODY" 2>"$REVIEW_ERR_FILE" >/dev/null
+gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --input "$REVIEW_PAYLOAD_FILE" 2>"$REVIEW_ERR_FILE" >/dev/null
 REVIEW_EXIT=$?
 set -e
 
-if [ "$REVIEW_EXIT" -ne 0 ] && [ "$GH_FLAG" != "--comment" ]; then
+if [ "$REVIEW_EXIT" -ne 0 ] && [ "$GH_EVENT" != "COMMENT" ]; then
   # GitHubの仕様上、PR作者本人は自分のPRをapprove/request-changesできない（self-review制限）。
-  # その場合は同内容で --comment にフォールバックする。
-  crl_log "gh pr review ($GH_FLAG) が失敗したため --comment にフォールバックします: $(cat "$REVIEW_ERR_FILE" 2>/dev/null || true)"
+  # その場合は同内容（インラインコメント含む）で event=COMMENT にフォールバックする。
+  crl_log "gh api pulls/reviews ($GH_EVENT) が失敗したため event=COMMENT にフォールバックします: $(cat "$REVIEW_ERR_FILE" 2>/dev/null || true)"
+  python3 -c 'import json,sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["event"] = "COMMENT"
+json.dump(d, open(p, "w"))' "$REVIEW_PAYLOAD_FILE"
   set +e
-  gh pr review "$PR_NUMBER" --repo "$REPO" --comment -b "$REVIEW_BODY" >/dev/null 2>"$REVIEW_ERR_FILE"
+  gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --input "$REVIEW_PAYLOAD_FILE" >/dev/null 2>"$REVIEW_ERR_FILE"
   REVIEW_EXIT=$?
   set -e
 fi
-rm -f "$REVIEW_ERR_FILE" 2>/dev/null || true
 
 if [ "$REVIEW_EXIT" -ne 0 ]; then
-  crl_log "gh pr review の投稿に失敗しました"
+  # インラインコメントの内容自体が原因で拒否された可能性があるため、
+  # 総評本文だけでの投稿にフォールバックし、レビュー自体は失われないようにする。
+  crl_log "gh api pulls/reviews がインラインコメント付きで失敗したため、コメント無しで再試行します: $(cat "$REVIEW_ERR_FILE" 2>/dev/null || true)"
+  python3 -c 'import json,sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["comments"] = []
+json.dump(d, open(p, "w"))' "$REVIEW_PAYLOAD_FILE"
+  set +e
+  gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --input "$REVIEW_PAYLOAD_FILE" >/dev/null 2>"$REVIEW_ERR_FILE"
+  REVIEW_EXIT=$?
+  set -e
+fi
+rm -f "$REVIEW_ERR_FILE" "$REVIEW_PAYLOAD_FILE" 2>/dev/null || true
+
+if [ "$REVIEW_EXIT" -ne 0 ]; then
+  crl_log "gh api pulls/reviews の投稿に失敗しました"
   set_trigger_reaction "confused"
   post_status_comment "⚠️ レビュー結果の投稿に失敗しました。ログを確認してください。"
   exit 0
