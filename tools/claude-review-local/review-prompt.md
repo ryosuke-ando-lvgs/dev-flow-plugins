@@ -14,9 +14,9 @@ PRのタイトル・説明・diffは以下に埋め込み済みです。必要�
 {{PR_BODY}}
 
 ### diff
-```diff
+{{DIFF_FENCE}}diff
 {{PR_DIFF}}
-```
+{{DIFF_FENCE}}
 
 ## レビュー観点
 

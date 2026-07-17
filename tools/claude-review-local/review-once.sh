@@ -73,9 +73,16 @@ OWNER="$OWNER" NAME="$NAME" PR_NUMBER="$PR_NUMBER" PR_TITLE="$PR_TITLE" PR_BODY=
   python3 -c '
 import glob
 import os
+import re
 template = open(os.environ["TEMPLATE_PATH"]).read()
 checklist_files = sorted(glob.glob(os.path.join(os.environ["CHECKLISTS_DIR"], "*.md")))
 checklists = "\n\n".join(open(f).read().strip() for f in checklist_files)
+pr_diff = os.environ.get("PR_DIFF", "")
+# diff自体に ``` を含む行がありうる（例: Markdown/コードのフェンスを変更するPR）ため、
+# diffを囲むフェンスはdiff中の最長バッククォート連続より長くして早期クローズを防ぐ。
+longest_run = max([len(m) for m in re.findall(r"`+", pr_diff)] + [2])
+diff_fence = "`" * (longest_run + 1)
+template = template.replace("{{DIFF_FENCE}}", diff_fence)
 for key in ["OWNER", "REPO", "PR_NUMBER", "PR_TITLE", "PR_BODY", "PR_DIFF"]:
     env_key = "NAME" if key == "REPO" else key
     template = template.replace("{{" + key + "}}", os.environ.get(env_key, ""))
