@@ -3,9 +3,11 @@
 PR に `/review` とコメントすると、**自分のマシン上の Claude Code**（サブスク認証）が
 そのPRをレビューし、review bot のように `gh pr review` で
 approve / request-changes / comment を返すローカル常駐ツール。
-監視対象リポジトリの固定リストは持たず、GitHub Search API で
-「自分（`CLAUDE_REVIEW_ALLOWED_USERS`）が `/review` とコメントした全PR」を
-リポジトリ横断で検索するため、閲覧可能などのリポでもそのまま動く。
+監視対象リポジトリの固定リストは持たず、GitHub Events API
+（`users/{login}/events`）で「自分（`CLAUDE_REVIEW_ALLOWED_USERS`）が
+`/review` とコメントした全PR」をリポジトリ横断で検知するため、閲覧可能な
+どのリポでもそのまま動く。Search API と異なりインデックス遅延が実質無く、
+コメント投稿後ほぼ即座に検知される。
 
 `dev-flow` の各スキル（`/dev-flow:*`）は Claude Code セッション内で明示的に呼び出す
 ものだが、これは GitHub 側の PR コメントをトリガーに**外部から**自律的に動く常駐
@@ -32,7 +34,7 @@ $EDITOR config.env   # 許可ユーザーなどを設定
 
 | 変数 | 説明 |
 | --- | --- |
-| `CLAUDE_REVIEW_ALLOWED_USERS` | `/review` を実行してよいGitHubログイン名（Search API の `commenter:` フィルタにも使う） |
+| `CLAUDE_REVIEW_ALLOWED_USERS` | `/review` を実行してよいGitHubログイン名（Events API のポーリング対象ユーザーにも使う） |
 | `CLAUDE_REVIEW_TRIGGER` | トリガー文字列（既定 `/review`） |
 | `CLAUDE_REVIEW_POLL_INTERVAL` | ポーリング間隔（秒） |
 | `CLAUDE_REVIEW_WORKDIR` | リポジトリのローカルクローン置き場 |
@@ -93,12 +95,12 @@ unset してから起動する（`lib.sh` の `crl_load_config`）。これに�
 
 ## 既知の制約
 
-- レビュー本体（diff読解〜`gh pr review`実行）は Claude 自身の agentic 実行に
-  委ねているため、`review-prompt.md` の指示に従わない/`gh pr review` を
-  実行し忘れるケースが稀にありうる。その場合はステータスコメントが
-  「レビュー中…」のまま残るので、ログ（`daemon.log`）を確認すること。
-- 複数リポを監視する場合、リポごとに独立した state ファイルでポーリングする
-  （並列実行はしないため、リポ数が多いとレビュー完了まで直列で待つ）。
+- claude が `ACTION:` 形式に従わない/解析できない出力を返すケースが稀にありうる。
+  その場合はステータスコメントに解析失敗が明記されるので、ログ（`daemon.log`）を
+  確認すること。
+- Events API は許可ユーザー本人の直近の公開activity（ページネーションを含め
+  実用上十分な件数）を返す。長期間 `/review` を使わなかった場合など、
+  非常に古いイベントは取得対象から外れることがある。
 - fork からの PR（head が別リポジトリ）は `origin` に head ブランチが無く
   `git fetch origin <ref>` が失敗しうる。同一リポジトリ内のブランチ間 PR を
   前提としている。
