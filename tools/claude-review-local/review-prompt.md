@@ -30,6 +30,12 @@ PRのタイトル・説明・diffは以下に埋め込み済みです。必要�
 
 ```
 ACTION: <approve|comment|request-changes>
+## FINDINGS_JSON
+```json
+[
+  {"file": "diff上のファイルパス（例: src/foo.ts）", "line": 42, "severity": "critical|high|mid|low", "message": "指摘内容"}
+]
+```
 ---
 ## 観点別レビュー
 
@@ -64,18 +70,11 @@ ACTION: <approve|comment|request-changes>
 - 問題なし → `ACTION: approve`
 - 誇張・断定しすぎない。確信度が低い指摘は「〜の可能性があります」と書く。
 
-さらに、上記本文の末尾に以下の形式で `FINDINGS_JSON` ブロックを追加してください。
-これは diff 上の特定のファイル:行に紐づく指摘だけを機械可読な形でも列挙するもので、
-レビューシステムがこれを各行へのインラインコメントとして投稿するために使います。
-
-```
-## FINDINGS_JSON
-```json
-[
-  {"file": "diff上のファイルパス（例: src/foo.ts）", "line": 42, "severity": "critical|high|mid|low", "message": "指摘内容"}
-]
-```
-```
+`FINDINGS_JSON` ブロック（上記出力形式内、`---` より前に配置）は、diff 上の特定の
+ファイル:行に紐づく指摘だけを機械可読な形でも列挙するもので、レビューシステムが
+これを各行へのインラインコメントとして投稿するために使います。`---` より前に
+出力することで、人間向けのトップレベル総評コメントには含まれず、GitHub Reviews API
+の行コメントとしてのみ使われます。
 
 - `file` は diff の `+++ b/...` に現れるリポジトリルートからの相対パス、`line` は
   diff の新しい方（追加後）のファイルにおける行番号（対象行がdiffの変更/追加範囲に
