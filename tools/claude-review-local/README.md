@@ -126,3 +126,5 @@ unset してから起動する（`lib.sh` の `crl_load_config`）。これに�
 - fork からの PR（head が別リポジトリ）は `origin` に head ブランチが無く
   `git fetch origin <ref>` が失敗しうる。同一リポジトリ内のブランチ間 PR を
   前提としている。
+
+<!-- 検証用の一時的な追記: インラインコメント機能の動作確認のため -->
