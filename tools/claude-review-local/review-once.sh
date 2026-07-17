@@ -178,6 +178,7 @@ try:
         if target.startswith('"') and target.endswith('"'):
             try:
                 inner = target[1:-1]
+                # 8進エスケープ文字列 → 生バイト列 → UTF-8文字列、の順に復元する
                 return inner.encode("utf-8").decode("unicode_escape").encode("latin1").decode("utf-8")
             except Exception:
                 return target
