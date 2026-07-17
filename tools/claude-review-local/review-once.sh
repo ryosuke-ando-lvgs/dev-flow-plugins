@@ -106,9 +106,10 @@ if [ "$CLAUDE_EXIT" -ne 0 ]; then
 fi
 
 REVIEW_ACTION="$(echo "$CLAUDE_OUTPUT" | grep -m1 -oE 'ACTION:[[:space:]]*(approve|comment|request-changes)' | sed -E 's/ACTION:[[:space:]]*//')"
-# FINDINGS_JSON はテンプレート側の指示で `---` より前（本文の外）に出力させているため、
-# ここで `---` 以降を取り出すだけで人間向けの本文にはFINDINGS_JSONが含まれない。
-REVIEW_BODY="$(echo "$CLAUDE_OUTPUT" | sed -n '/^---$/,$p' | tail -n +2)"
+# FINDINGS_JSON はテンプレート側の指示で `---` より前（本文の外）に出力させているが、
+# LLMの出力が必ずしも指示順序どおりとは限らないため、念のため本文側にも
+# `## FINDINGS_JSON` 以降を切り落とす防御的な処理を残す。
+REVIEW_BODY="$(echo "$CLAUDE_OUTPUT" | sed -n '/^---$/,$p' | tail -n +2 | sed '/^##[[:space:]]*FINDINGS_JSON/,$d')"
 
 if [ -z "$REVIEW_ACTION" ] || [ -z "$REVIEW_BODY" ]; then
   crl_log "claude -p の出力からACTION/本文を解析できませんでした: $CLAUDE_OUTPUT"
