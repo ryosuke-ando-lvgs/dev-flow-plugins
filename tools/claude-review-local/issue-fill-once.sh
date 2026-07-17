@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 1件の /fill コメントを処理する: リポ更新 → claude -p でIssue本文の埋め込み案を取得 → Issue本文を更新。
-# claudeにはgh/gitコマンドの実行権限を一切与えず、Read/Grep/Glob/WebFetch/WebSearchのみで
-# ローカルチェックアウト済みのコードや外部情報を参照させ、埋め込み後の本文はテキストで受け取る。
+# claudeにはgh/gitコマンドの実行権限を一切与えず、Read/Grep/Globのみで
+# ローカルチェックアウト済みのコードを参照させ、埋め込み後の本文はテキストで受け取る。
+# Issue本文/タイトルは第三者が書き込めるため、外部URLへの読み取りアクセス（WebFetch/WebSearch）は
+# プロンプトインジェクション経由の情報持ち出しリスクを避けるためあえて許可しない。
 # 実際のGitHub書き込み（Issue本文の更新）は本スクリプト側が行う。
 # 使い方: issue-fill-once.sh <owner/repo> <issue_number> <comment_id>
 set -euo pipefail
@@ -20,45 +22,15 @@ OWNER="${REPO%%/*}"
 NAME="${REPO##*/}"
 REPO_SLUG="$(echo "$REPO" | tr '/' '__')"
 REPO_DIR="$CLAUDE_REVIEW_WORKDIR/$REPO_SLUG"
-MARKER="<!-- claude-review-local -->"
 
-LOCK_DIR="$CLAUDE_REVIEW_STATE_DIR/locks"
-mkdir -p "$LOCK_DIR"
-REPO_LOCK="$LOCK_DIR/${REPO_SLUG}.lock"
-while ! mkdir "$REPO_LOCK" 2>/dev/null; do
-  sleep 2
-done
-trap 'rmdir "$REPO_LOCK" 2>/dev/null || true; rm -f "${PROMPT_FILE:-}" 2>/dev/null || true' EXIT
+# 同一リポジトリの並列実行はローカルクローン(REPO_DIR)を共有するため、
+# git checkout 等が競合しないようリポジトリ単位で直列化する（別リポは並列可）。
+REPO_LOCK="$(crl_acquire_repo_lock "$REPO_SLUG")"
+trap 'rmdir "$REPO_LOCK" 2>/dev/null || true; rm -f "${PROMPT_FILE:-}" "${UPDATE_ERR_FILE:-}" 2>/dev/null || true' EXIT
 
-post_status_comment() {
-  local body="$1"
-  local full_body
-  full_body="$(printf '%s\n%s\n' "$MARKER" "$body")"
-
-  local existing_id
-  existing_id="$(gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" --paginate \
-    --jq "[.[] | select(.body | startswith(\"$MARKER\"))][-1].id // empty" 2>/dev/null || true)"
-
-  if [ -n "$existing_id" ]; then
-    gh api "repos/$REPO/issues/comments/$existing_id" -X PATCH -f body="$full_body" >/dev/null
-  else
-    gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" -X POST -f body="$full_body" >/dev/null
-  fi
-}
-
-set_trigger_reaction() {
-  local content="$1"
-  gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -X POST -f content="$content" >/dev/null 2>&1 || true
-}
-
-clear_trigger_reaction() {
-  local content="$1"
-  local self_login reaction_id
-  self_login="$(gh api user --jq .login 2>/dev/null || echo "")"
-  reaction_id="$(gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" --paginate \
-    --jq "[.[] | select(.content == \"$content\" and .user.login == \"$self_login\")][0].id // empty" 2>/dev/null || true)"
-  [ -n "$reaction_id" ] && gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions/$reaction_id" -X DELETE >/dev/null 2>&1 || true
-}
+post_status_comment() { crl_post_status_comment "$REPO" "$ISSUE_NUMBER" "$1"; }
+set_trigger_reaction() { crl_set_trigger_reaction "$REPO" "$COMMENT_ID" "$1"; }
+clear_trigger_reaction() { crl_clear_trigger_reaction "$REPO" "$COMMENT_ID" "$1"; }
 
 crl_log "Issue #${ISSUE_NUMBER} (${REPO}) の本文埋め込みを開始します（comment_id=${COMMENT_ID}）"
 
@@ -104,7 +76,7 @@ open(os.environ["OUTPUT_PATH"], "w").write(template)
 
 set +e
 CLAUDE_OUTPUT="$(cd "$REPO_DIR" && "$CLAUDE_REVIEW_CLAUDE_BIN" -p "$(cat "$PROMPT_FILE")" \
-  --allowedTools "Read" "Grep" "Glob" "WebFetch" "WebSearch")"
+  --allowedTools "Read" "Grep" "Glob")"
 CLAUDE_EXIT=$?
 set -e
 
@@ -118,13 +90,19 @@ if [ "$CLAUDE_EXIT" -ne 0 ]; then
 fi
 
 NEW_BODY="$(echo "$CLAUDE_OUTPUT" | sed -n '/^---$/,$p' | tail -n +2)"
+# claudeが末尾に余計な ``` フェンスを付けて返すことがあるため、単独行の ``` は取り除く。
+NEW_BODY="$(echo "$NEW_BODY" | sed '/^```$/d')"
 
-if [ -z "$NEW_BODY" ]; then
+if [ -z "$(echo "$NEW_BODY" | tr -d '[:space:]')" ]; then
   crl_log "claude -p の出力から本文を解析できませんでした: $CLAUDE_OUTPUT"
   set_trigger_reaction "confused"
   post_status_comment "⚠️ ローカル Claude の出力形式が不正で本文埋め込みを解析できませんでした。ログを確認してください。"
   exit 0
 fi
+
+# 元の本文をバックアップとしてステータスコメントに残し、置き換え後に手動で
+# 元に戻せるようにする（本更新はIssue本文を丸ごと上書きするため）。
+post_status_comment "$(printf '📝 本文を置き換えます。置き換え前の本文（バックアップ）:\n\n<details><summary>元の本文</summary>\n\n%s\n\n</details>' "$ISSUE_BODY")"
 
 # --- Issue本文の更新（項目構成は変えず内容だけ置き換える。実際の書き込みはこのスクリプトが行う） ---
 UPDATE_ERR_FILE="$(mktemp)"
@@ -132,14 +110,15 @@ set +e
 gh api "repos/$REPO/issues/$ISSUE_NUMBER" -X PATCH -f body="$NEW_BODY" 2>"$UPDATE_ERR_FILE" >/dev/null
 UPDATE_EXIT=$?
 set -e
-rm -f "$UPDATE_ERR_FILE" 2>/dev/null || true
 
 if [ "$UPDATE_EXIT" -ne 0 ]; then
-  crl_log "Issue本文の更新に失敗しました"
+  crl_log "Issue本文の更新に失敗しました: $(cat "$UPDATE_ERR_FILE" 2>/dev/null)"
+  rm -f "$UPDATE_ERR_FILE" 2>/dev/null || true
   set_trigger_reaction "confused"
   post_status_comment "⚠️ Issue本文の更新に失敗しました。ログを確認してください。"
   exit 0
 fi
+rm -f "$UPDATE_ERR_FILE" 2>/dev/null || true
 
 set_trigger_reaction "+1"
 post_status_comment "✅ ローカル Claude によりIssue本文を埋め込みました（項目構成は維持し、内容のみ置き換え）。内容を確認してください。"

@@ -84,8 +84,13 @@ poll_issue_fill() {
   local allowed
   for allowed in $CLAUDE_REVIEW_ALLOWED_USERS; do
     local events count i
-    events="$(gh api "users/$allowed/events" -X GET --paginate \
-      --jq '[.[] | select(.type=="IssueCommentEvent" and .payload.issue.pull_request == null and (.payload.comment.body | sub("^[\r\n]+"; "") | startswith("'"$CLAUDE_REVIEW_FILL_TRIGGER"'"))) | {repo: .repo.name, number: .payload.issue.number, comment_id: .payload.comment.id, created_at: .payload.comment.created_at, author: .actor.login}]' 2>/dev/null | jq -s 'add' || echo '[]')"
+    # gh api の --jq はシェル変数展開のみで --arg 相当の機能が無いため、
+    # 生イベントを一旦そのまま取得してから、別プロセスの jq --arg でトリガー文字列を渡す
+    # （$CLAUDE_REVIEW_FILL_TRIGGER に " 等が含まれても壊れないようにするため）。
+    events="$(gh api "users/$allowed/events" -X GET --paginate --jq '.' 2>/dev/null \
+      | jq -s 'add // []' \
+      | jq --arg trigger "$CLAUDE_REVIEW_FILL_TRIGGER" \
+        '[.[] | select(.type=="IssueCommentEvent" and .payload.issue.pull_request == null and (.payload.comment.body | sub("^[\r\n]+"; "") | startswith($trigger))) | {repo: .repo.name, number: .payload.issue.number, comment_id: .payload.comment.id, created_at: .payload.comment.created_at, author: .actor.login}]' 2>/dev/null || echo '[]')"
 
     count="$(echo "$events" | jq 'length')"
     i=0
@@ -108,12 +113,12 @@ poll_issue_fill() {
       fi
 
       if ! crl_is_allowed_user "$author"; then
-        crl_mark_fill_processed "$comment_id" "$created_at"
+        crl_mark_processed "$GLOBAL_STATE_FILE" "fill-$comment_id" "$created_at" "fill_last_seen"
         continue
       fi
 
       crl_log "Fillトリガー検知: repo=$repo issue=$issue_number author=$author comment_id=$comment_id"
-      crl_mark_fill_processed "$comment_id" "$created_at"
+      crl_mark_processed "$GLOBAL_STATE_FILE" "fill-$comment_id" "$created_at" "fill_last_seen"
 
       while [ "$(jobs -rp | wc -l)" -ge "$CLAUDE_REVIEW_MAX_PARALLEL" ]; do
         wait -n 2>/dev/null || sleep 1
@@ -124,25 +129,6 @@ poll_issue_fill() {
       ) &
     done
   done
-}
-
-# poll_global の processed_ids と衝突しないよう "fill-" プレフィックス付きIDで記録しつつ、
-# last_seen は fill_last_seen という別キーで管理する。
-crl_mark_fill_processed() {
-  local comment_id="$1" created_at="$2"
-  local tmp
-  tmp="$(mktemp)"
-  if [ -f "$GLOBAL_STATE_FILE" ]; then
-    jq \
-      --arg id "fill-$comment_id" \
-      --arg ts "$created_at" \
-      '.processed_ids = ((.processed_ids // []) + [$id] | unique | .[-200:]) | .fill_last_seen = ([.fill_last_seen // "1970-01-01T00:00:00Z", $ts] | max)' \
-      "$GLOBAL_STATE_FILE" > "$tmp"
-  else
-    jq -n --arg id "fill-$comment_id" --arg ts "$created_at" \
-      '{processed_ids: [$id], fill_last_seen: $ts}' > "$tmp"
-  fi
-  mv "$tmp" "$GLOBAL_STATE_FILE"
 }
 
 while true; do
