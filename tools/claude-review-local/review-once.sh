@@ -107,13 +107,15 @@ open(os.environ["OUTPUT_PATH"], "w").write(template)
 '
 
 # --- claude -p 実行（サブスク認証。ANTHROPIC_API_KEY は crl_load_config で unset 済み）。
-#     Bashツールは一切許可せず、Read/Grep/Globのみ許可する。
+#     Bash/gh/gitは一切許可しない。Read/Grep/Globに加え、依存パッケージ更新PRの
+#     レビューでリリースノート/CHANGELOGを調べられるようWebFetch/WebSearch
+#     （読み取り専用のHTTPフェッチのみで、コマンド実行権限ではない）も許可する。
 #     claude自身はgh pr reviewを実行せず、判定結果をテキストで出力するだけにし、
 #     実際のGitHub書き込み（gh pr review）はこのスクリプト側で行う。
 #     これにより確認待ち（プランモード等）で止まる余地自体をなくす。 ---
 set +e
 CLAUDE_OUTPUT="$(cd "$REPO_DIR" && "$CLAUDE_REVIEW_CLAUDE_BIN" -p "$(cat "$PROMPT_FILE")" \
-  --allowedTools "Read" "Grep" "Glob")"
+  --allowedTools "Read" "Grep" "Glob" "WebFetch" "WebSearch")"
 CLAUDE_EXIT=$?
 set -e
 
