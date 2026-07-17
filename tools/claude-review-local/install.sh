@@ -28,6 +28,12 @@ sed \
 launchctl unload "$PLIST_DEST" 2>/dev/null || true
 launchctl load "$PLIST_DEST"
 
+# main pull時にclaude-review-local関連の更新があれば自動でデーモンを再起動するhookを設定する。
+HOOKS_DIR="$(cd "$CRL_DIR" && cd "$(git rev-parse --git-dir)" && pwd)/hooks"
+cp "$CRL_DIR/hooks/post-merge" "$HOOKS_DIR/post-merge"
+chmod +x "$HOOKS_DIR/post-merge"
+
 echo "インストール完了: $PLIST_DEST"
 echo "ログ: $LOG_PATH"
+echo "post-merge hook設定完了: $HOOKS_DIR/post-merge（mainをpullし関連ファイルが更新された時のみ自動でデーモン再起動）"
 echo "停止する場合: launchctl unload $PLIST_DEST"

@@ -65,6 +65,17 @@ clear_trigger_reaction() {
 }
 
 crl_log "PR #${PR_NUMBER} (${REPO}) のレビューを開始します（comment_id=${COMMENT_ID}）"
+
+# --- マージ/クローズ済みPRへの遅延トリガー（head branchが既に削除済み等）を
+#     素通りさせず、ここで検知して分かりやすい状態にする ---
+PR_STATE="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json state --jq .state)"
+if [ "$PR_STATE" != "OPEN" ]; then
+  crl_log "PR #${PR_NUMBER} (${REPO}) は既に ${PR_STATE} のためレビューをスキップします"
+  set_trigger_reaction "confused"
+  post_status_comment "ℹ️ このPRは既に ${PR_STATE} のため、レビューをスキップしました。"
+  exit 0
+fi
+
 set_trigger_reaction "eyes"
 post_status_comment "🤖 ローカル Claude がレビュー中です…しばらくお待ちください。"
 

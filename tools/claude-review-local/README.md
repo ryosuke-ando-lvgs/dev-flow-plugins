@@ -67,6 +67,11 @@ $EDITOR config.env   # 許可ユーザーなどを設定
 ログイン時に自動起動・クラッシュ時は自動再起動する。ログは
 `~/.claude-review-local/daemon.log`。
 
+`install.sh` は同時に `post-merge` git hookも設定する。`main` ブランチで
+`git pull` した際、`tools/claude-review-local/` 配下に変更が含まれていれば
+自動でデーモンを再起動し、最新コードを反映する（`main` 以外のブランチへの
+pullやmerge先が変わらない場合は何もしない）。
+
 停止する場合:
 
 ```bash

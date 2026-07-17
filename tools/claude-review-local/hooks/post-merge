@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# git pull (merge) 後にmainブランチかつ claude-review-local 関連ファイルが更新された場合のみ、
+# launchd デーモンを自動再起動して変更を反映する。
+# install.sh により .git/hooks/post-merge にインストールされる。
+set -euo pipefail
+
+CRL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLIST_LABEL="com.ryosuke-ando-lvgs.claude-review"
+PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+[ "$BRANCH" = "main" ] || exit 0
+[ -f "$PLIST_PATH" ] || exit 0
+
+# $1 はsquashされたコミットかどうかのフラグ（post-merge hookの第1引数）。
+# 直前のORIG_HEADからの差分に claude-review-local 配下の変更が含まれるかで判定する。
+if ! git diff --name-only ORIG_HEAD HEAD -- tools/claude-review-local/ | grep -q .; then
+  exit 0
+fi
+
+echo "[claude-review-local] 関連ファイルの更新を検知したためデーモンを再起動します"
+launchctl unload "$PLIST_PATH" 2>/dev/null || true
+launchctl load "$PLIST_PATH"
