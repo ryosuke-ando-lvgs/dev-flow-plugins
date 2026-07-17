@@ -49,6 +49,8 @@ ACTION: <approve|comment|request-changes>
   各観点を実際にチェックした上での判断であることが分かるようにする。
 - ただしPRの内容に明らかに関係しない観点（例: 依存パッケージ更新でないPRにおける
   「依存パッケージ更新のレビュー」観点）は、そのセクション自体を省略してよい。
+- 「要件との整合性確認」観点（`checklists/01-requirements-consistency.md`）だけは
+  例外で、PRの内容によらず**必ず出力する**（省略不可）。
 - 重大な問題（バグ・要件不適合）がある → `ACTION: request-changes`
 - 軽微な指摘のみ（マージ自体は妨げない） → `ACTION: comment`
 - 問題なし → `ACTION: approve`
