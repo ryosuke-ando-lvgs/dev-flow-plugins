@@ -172,6 +172,18 @@ try:
     if not isinstance(findings, list):
         findings = []
 
+    def unquote_diff_path(target):
+        # 非ASCII文字を含むパスは git により `"b/...\NNN..."` の形（Cスタイルの
+        # 8進エスケープ付きダブルクォート）で出力されるため、実際のUTF-8パスに戻す。
+        if target.startswith('"') and target.endswith('"'):
+            try:
+                inner = target[1:-1]
+                # 8進エスケープ文字列 → 生バイト列 → UTF-8文字列、の順に復元する
+                return inner.encode("utf-8").decode("unicode_escape").encode("latin1").decode("utf-8")
+            except Exception:
+                return target
+        return target
+
     diff_text = os.environ["PR_DIFF"]
     valid_lines = {}
     current_path = None
@@ -179,7 +191,7 @@ try:
     for line in diff_text.splitlines():
         dm = re.match(r"^\+\+\+ (.+)$", line)
         if dm:
-            target = dm.group(1)
+            target = unquote_diff_path(dm.group(1))
             if target == "/dev/null":
                 current_path = None
             else:
