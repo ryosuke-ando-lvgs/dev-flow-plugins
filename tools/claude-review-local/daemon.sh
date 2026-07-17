@@ -72,7 +72,67 @@ poll_global() {
   done
 }
 
+# 許可ユーザー本人が「Issue（PRではない）」に /fill とコメントした場合を検知し、
+# issue-fill-once.sh に処理を委譲する。poll_global とほぼ同じ仕組みだが、
+# .payload.issue.pull_request が null（＝PRではなく素のIssue）のものだけを対象にする。
+poll_issue_fill() {
+  local last_seen="1970-01-01T00:00:00Z"
+  if [ -f "$GLOBAL_STATE_FILE" ]; then
+    last_seen="$(jq -r '.fill_last_seen // "1970-01-01T00:00:00Z"' "$GLOBAL_STATE_FILE")"
+  fi
+
+  local allowed
+  for allowed in $CLAUDE_REVIEW_ALLOWED_USERS; do
+    local events count i
+    # gh api の --jq はシェル変数展開のみで --arg 相当の機能が無いため、
+    # 生イベントを一旦そのまま取得してから、別プロセスの jq --arg でトリガー文字列を渡す
+    # （$CLAUDE_REVIEW_FILL_TRIGGER に " 等が含まれても壊れないようにするため）。
+    events="$(gh api "users/$allowed/events" -X GET --paginate --jq '.' 2>/dev/null \
+      | jq -s 'add // []' \
+      | jq --arg trigger "$CLAUDE_REVIEW_FILL_TRIGGER" \
+        '[.[] | select(.type=="IssueCommentEvent" and .payload.issue.pull_request == null and (.payload.comment.body | sub("^[\r\n]+"; "") | startswith($trigger))) | {repo: .repo.name, number: .payload.issue.number, comment_id: .payload.comment.id, created_at: .payload.comment.created_at, author: .actor.login}]' 2>/dev/null || echo '[]')"
+
+    count="$(echo "$events" | jq 'length')"
+    i=0
+    while [ "$i" -lt "$count" ]; do
+      local item repo issue_number created_at comment_id author
+      item="$(echo "$events" | jq -c ".[$i]")"
+      repo="$(echo "$item" | jq -r '.repo')"
+      issue_number="$(echo "$item" | jq -r '.number')"
+      created_at="$(echo "$item" | jq -r '.created_at')"
+      comment_id="$(echo "$item" | jq -r '.comment_id')"
+      author="$(echo "$item" | jq -r '.author')"
+      i=$((i + 1))
+
+      if [[ "$created_at" < "$last_seen" || "$created_at" == "$last_seen" ]]; then
+        continue
+      fi
+
+      if crl_is_processed "$GLOBAL_STATE_FILE" "fill-$comment_id"; then
+        continue
+      fi
+
+      if ! crl_is_allowed_user "$author"; then
+        crl_mark_processed "$GLOBAL_STATE_FILE" "fill-$comment_id" "$created_at" "fill_last_seen"
+        continue
+      fi
+
+      crl_log "Fillトリガー検知: repo=$repo issue=$issue_number author=$author comment_id=$comment_id"
+      crl_mark_processed "$GLOBAL_STATE_FILE" "fill-$comment_id" "$created_at" "fill_last_seen"
+
+      while [ "$(jobs -rp | wc -l)" -ge "$CLAUDE_REVIEW_MAX_PARALLEL" ]; do
+        wait -n 2>/dev/null || sleep 1
+      done
+      (
+        "$CRL_DIR/issue-fill-once.sh" "$repo" "$issue_number" "$comment_id" \
+          || crl_log "issue-fill-once.sh が失敗しました (repo=$repo issue=$issue_number)"
+      ) &
+    done
+  done
+}
+
 while true; do
   poll_global || crl_log "poll_global でエラーが発生しましたが継続します"
+  poll_issue_fill || crl_log "poll_issue_fill でエラーが発生しましたが継続します"
   sleep "$CLAUDE_REVIEW_POLL_INTERVAL"
 done

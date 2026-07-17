@@ -20,49 +20,15 @@ OWNER="${REPO%%/*}"
 NAME="${REPO##*/}"
 REPO_SLUG="$(echo "$REPO" | tr '/' '__')"
 REPO_DIR="$CLAUDE_REVIEW_WORKDIR/$REPO_SLUG"
-MARKER="<!-- claude-review-local -->"
-SELF_LOGIN="$(gh api user --jq .login 2>/dev/null || echo "")"
 
 # 同一リポジトリの並列実行はローカルクローン(REPO_DIR)を共有するため、
 # git checkout 等が競合しないようリポジトリ単位で直列化する（別リポは並列可）。
-LOCK_DIR="$CLAUDE_REVIEW_STATE_DIR/locks"
-mkdir -p "$LOCK_DIR"
-REPO_LOCK="$LOCK_DIR/${REPO_SLUG}.lock"
-while ! mkdir "$REPO_LOCK" 2>/dev/null; do
-  sleep 2
-done
+REPO_LOCK="$(crl_acquire_repo_lock "$REPO_SLUG")"
 trap 'rmdir "$REPO_LOCK" 2>/dev/null || true; rm -f "${PROMPT_FILE:-}" "${REVIEW_PAYLOAD_FILE:-}" "${REVIEW_ERR_FILE:-}" 2>/dev/null || true' EXIT
 
-post_status_comment() {
-  local body="$1"
-  local full_body
-  full_body="$(printf '%s\n%s\n' "$MARKER" "$body")"
-
-  local existing_id
-  existing_id="$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-    --jq "[.[] | select(.body | startswith(\"$MARKER\"))][-1].id // empty" 2>/dev/null || true)"
-
-  if [ -n "$existing_id" ]; then
-    gh api "repos/$REPO/issues/comments/$existing_id" -X PATCH -f body="$full_body" >/dev/null
-  else
-    gh api "repos/$REPO/issues/$PR_NUMBER/comments" -X POST -f body="$full_body" >/dev/null
-  fi
-}
-
-# トリガーとなった /review コメント自体にリアクションを付け、一目で状態が分かるようにする。
-# 同じ内容のリアクションはGitHub側で重複作成されないため、都度POSTするだけでよい。
-set_trigger_reaction() {
-  local content="$1"
-  gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -X POST -f content="$content" >/dev/null 2>&1 || true
-}
-
-clear_trigger_reaction() {
-  local content="$1"
-  local reaction_id
-  reaction_id="$(gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" --paginate \
-    --jq "[.[] | select(.content == \"$content\" and .user.login == \"$SELF_LOGIN\")][0].id // empty" 2>/dev/null || true)"
-  [ -n "$reaction_id" ] && gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions/$reaction_id" -X DELETE >/dev/null 2>&1 || true
-}
+post_status_comment() { crl_post_status_comment "$REPO" "$PR_NUMBER" "$1"; }
+set_trigger_reaction() { crl_set_trigger_reaction "$REPO" "$COMMENT_ID" "$1"; }
+clear_trigger_reaction() { crl_clear_trigger_reaction "$REPO" "$COMMENT_ID" "$1"; }
 
 crl_log "PR #${PR_NUMBER} (${REPO}) のレビューを開始します（comment_id=${COMMENT_ID}）"
 
