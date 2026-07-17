@@ -16,6 +16,7 @@ crl_load_config() {
 
   : "${CLAUDE_REVIEW_ALLOWED_USERS:?CLAUDE_REVIEW_ALLOWED_USERS が未設定です}"
   : "${CLAUDE_REVIEW_TRIGGER:=/review}"
+  : "${CLAUDE_REVIEW_FILL_TRIGGER:=/fill}"
   : "${CLAUDE_REVIEW_POLL_INTERVAL:=90}"
   : "${CLAUDE_REVIEW_WORKDIR:=$HOME/.claude-review-local/repos}"
   : "${CLAUDE_REVIEW_STATE_DIR:=$HOME/.claude-review-local}"

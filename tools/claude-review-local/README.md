@@ -35,7 +35,8 @@ $EDITOR config.env   # 許可ユーザーなどを設定
 | 変数 | 説明 |
 | --- | --- |
 | `CLAUDE_REVIEW_ALLOWED_USERS` | `/review` を実行してよいGitHubログイン名（Events API のポーリング対象ユーザーにも使う） |
-| `CLAUDE_REVIEW_TRIGGER` | トリガー文字列（既定 `/review`） |
+| `CLAUDE_REVIEW_TRIGGER` | PRレビューのトリガー文字列（既定 `/review`） |
+| `CLAUDE_REVIEW_FILL_TRIGGER` | Issue本文埋め込みのトリガー文字列（既定 `/fill`） |
 | `CLAUDE_REVIEW_POLL_INTERVAL` | ポーリング間隔（秒） |
 | `CLAUDE_REVIEW_WORKDIR` | リポジトリのローカルクローン置き場 |
 
@@ -63,6 +64,23 @@ GitHub への投稿は `review-once.sh` 自身が GitHub Reviews API
 指摘だけをインラインの行コメントとして各行に付ける。diff範囲外などGitHubが
 受理できない指摘は自動的に除外し（トップレベル本文には元々含まれているため
 内容が失われることはない）、除外件数はログに記録される。
+
+## Issue本文の自動埋め込み（`/fill`）
+
+タイトルだけ入力してテンプレートの項目が空のままのIssue（bug/story等）に対し、
+その Issue に `/fill`（既定。`CLAUDE_REVIEW_FILL_TRIGGER` で変更可）とコメントすると、
+`/review` と同じ仕組み（ローカル Claude が Read/Grep/Glob/WebFetch/WebSearch のみで
+調査し、結果をテキストで返す→実際の書き込みはスクリプト側が行う）で、
+**Issueテンプレートの項目構成（見出し・フィールド名・チェックボックス等）は変えずに、
+各項目の中身だけをリポジトリのコードや文脈から推測して埋める**。
+
+- 対象はデフォルトブランチをチェックアウトして調査する（PRのdiffではなくリポジトリ全体）。
+- 調査しても具体的な内容が埋められない項目は、内容を捏造せず
+  「（要追記: 〜の情報が必要）」のように不足点を明記したプレースホルダを残す。
+- 実際の書き込み（Issue本文の更新）は `issue-fill-once.sh` が
+  `gh api repos/.../issues/... -X PATCH` で行う。claude 自身は書き込み権限を持たない。
+- 処理中・完了時は `/review` と同様に `<!-- claude-review-local -->` マーカー付き
+  ステータスコメントとリアクションで状態が分かるようにする。
 
 ## 常駐化（launchd）
 
