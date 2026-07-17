@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 監視対象リポの issue comment をポーリングし、/review コメントを検知したら
+# GitHub Events API で許可ユーザー自身の /review コメントを検知したら
 # review-once.sh に処理を委譲するループ本体。
 set -euo pipefail
 
@@ -9,53 +9,37 @@ source "$CRL_DIR/lib.sh"
 
 crl_load_config
 
-crl_log "claude-review-local daemon 起動 (全リポ横断検索モード / allowed_users: $CLAUDE_REVIEW_ALLOWED_USERS / interval: ${CLAUDE_REVIEW_POLL_INTERVAL}s)"
+crl_log "claude-review-local daemon 起動 (Events APIモード / allowed_users: $CLAUDE_REVIEW_ALLOWED_USERS / interval: ${CLAUDE_REVIEW_POLL_INTERVAL}s)"
 
 GLOBAL_STATE_FILE="$CLAUDE_REVIEW_STATE_DIR/state-global.json"
 
-# 自分（許可ユーザー）が /review とコメントした PR を、リポジトリを問わず
-# GitHub Search API (`in:comments` + `commenter:`) で横断検索する。
-# 静的なリポジトリリストを持たないため、閲覧可能などのリポでも動く。
+# 許可ユーザー本人の GitHub Events API (`users/{login}/events`) から
+# 自身が投稿した IssueCommentEvent を取得し、/review トリガーコメントを検知する。
+# GitHub Search API と異なりインデックス遅延が実質無く、静的なリポジトリリストも不要。
+# コメント本文は稀に先頭に \r\n が付くことがあるため、startswith 判定前にトリムする。
 poll_global() {
   local last_seen="1970-01-01T00:00:00Z"
   if [ -f "$GLOBAL_STATE_FILE" ]; then
     last_seen="$(jq -r '.last_seen // "1970-01-01T00:00:00Z"' "$GLOBAL_STATE_FILE")"
   fi
 
-  local allowed commenter_q issues
-  commenter_q=""
+  local allowed
   for allowed in $CLAUDE_REVIEW_ALLOWED_USERS; do
-    commenter_q="$commenter_q commenter:$allowed"
-  done
+    local events count i
+    events="$(gh api "users/$allowed/events" -X GET --paginate \
+      --jq '[.[] | select(.type=="IssueCommentEvent" and .payload.issue.pull_request != null and (.payload.comment.body | sub("^[\r\n]+"; "") | startswith("'"$CLAUDE_REVIEW_TRIGGER"'"))) | {repo: .repo.name, number: .payload.issue.number, comment_id: .payload.comment.id, created_at: .payload.comment.created_at, author: .actor.login}]' 2>/dev/null || echo '[]')"
 
-  issues="$(gh api search/issues -X GET --paginate \
-    -f q="$CLAUDE_REVIEW_TRIGGER in:comments is:pr$commenter_q" \
-    --jq '[.items[] | {repo: (.repository_url | sub(".*/repos/"; "")), number}]' 2>/dev/null || echo '[]')"
-
-  local count
-  count="$(echo "$issues" | jq 'length')"
-  local i=0
-  while [ "$i" -lt "$count" ]; do
-    local item repo pr_number
-    item="$(echo "$issues" | jq -c ".[$i]")"
-    repo="$(echo "$item" | jq -r '.repo')"
-    pr_number="$(echo "$item" | jq -r '.number')"
-    i=$((i + 1))
-
-    # 検索結果のPR単位から、実際の該当コメントを取り直して created_at / author を確定する。
-    local comments c_count j
-    comments="$(gh api "repos/$repo/issues/$pr_number/comments" -X GET --paginate \
-      -f since="$last_seen" \
-      --jq "[.[] | select(.body | startswith(\"$CLAUDE_REVIEW_TRIGGER\"))]" 2>/dev/null || echo '[]')"
-    c_count="$(echo "$comments" | jq 'length')"
-    j=0
-    while [ "$j" -lt "$c_count" ]; do
-      local c created_at comment_id author
-      c="$(echo "$comments" | jq -c ".[$j]")"
-      created_at="$(echo "$c" | jq -r '.created_at')"
-      comment_id="$(echo "$c" | jq -r '.id')"
-      author="$(echo "$c" | jq -r '.user.login')"
-      j=$((j + 1))
+    count="$(echo "$events" | jq 'length')"
+    i=0
+    while [ "$i" -lt "$count" ]; do
+      local item repo pr_number created_at comment_id author
+      item="$(echo "$events" | jq -c ".[$i]")"
+      repo="$(echo "$item" | jq -r '.repo')"
+      pr_number="$(echo "$item" | jq -r '.number')"
+      created_at="$(echo "$item" | jq -r '.created_at')"
+      comment_id="$(echo "$item" | jq -r '.comment_id')"
+      author="$(echo "$item" | jq -r '.author')"
+      i=$((i + 1))
 
       if [[ "$created_at" < "$last_seen" || "$created_at" == "$last_seen" ]]; then
         continue
