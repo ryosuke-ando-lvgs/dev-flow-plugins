@@ -127,89 +127,108 @@ def fail(reason):
     raise SystemExit(0)
 
 
-claude_output = os.environ["CLAUDE_OUTPUT"]
-m = re.search(r"```json\s*(\{.*\})\s*```", claude_output, re.DOTALL)
-if not m:
-    fail("```json フェンス付きのJSONブロックが見つかりません")
+def extract_json_block(text):
+    m = re.search(r"```json\s*(\{.*)\s*```", text, re.DOTALL)
+    candidates = [m.group(1)] if m else []
+    candidates.append(text)
+    for c in candidates:
+        start = c.find("{")
+        if start < 0:
+            continue
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(c[start:])
+            return obj
+        except Exception:
+            continue
+    return None
+
+
+SEVERITIES = {"critical", "high", "mid", "low"}
 
 try:
-    data = json.loads(m.group(1))
+    data = extract_json_block(os.environ["CLAUDE_OUTPUT"])
+    if data is None:
+        fail("```json フェンス付きのJSONブロックが見つからないか、パースに失敗しました")
+
+    if not isinstance(data, dict):
+        fail("JSONのトップレベルがオブジェクトではありません")
+
+    action = data.get("action")
+    body = data.get("body")
+    findings = data.get("findings", [])
+
+    event_map = {"approve": "APPROVE", "request-changes": "REQUEST_CHANGES", "comment": "COMMENT"}
+    if action not in event_map:
+        fail(f"actionの値が不正です: {action!r}")
+    if not isinstance(body, str) or not body.strip():
+        fail("bodyが空です")
+    if not isinstance(findings, list):
+        findings = []
+
+    diff_text = os.environ["PR_DIFF"]
+    valid_lines = {}
+    current_path = None
+    new_line = None
+    for line in diff_text.splitlines():
+        dm = re.match(r"^\+\+\+ (.+)$", line)
+        if dm:
+            target = dm.group(1)
+            if target == "/dev/null":
+                current_path = None
+            else:
+                current_path = re.sub(r"^b/", "", target)
+                valid_lines.setdefault(current_path, set())
+            new_line = None
+            continue
+        hm = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+        if hm:
+            new_line = int(hm.group(1))
+            continue
+        if current_path is None or new_line is None:
+            continue
+        if line.startswith("+"):
+            valid_lines[current_path].add(new_line)
+            new_line += 1
+        elif line.startswith(" "):
+            valid_lines[current_path].add(new_line)
+            new_line += 1
+        elif line.startswith("-"):
+            pass
+        # "\\ No newline..." 等は行番号に影響しないため無視する
+
+    comments = []
+    dropped = 0
+    for f in findings:
+        if not isinstance(f, dict):
+            dropped += 1
+            continue
+        path = f.get("file")
+        line_no = f.get("line")
+        severity = f.get("severity", "")
+        message = f.get("message", "")
+        if severity not in SEVERITIES:
+            severity = ""
+        if not path or not isinstance(line_no, int) or path not in valid_lines or line_no not in valid_lines[path]:
+            dropped += 1
+            continue
+        tag = f"**[{severity}]** " if severity else ""
+        comments.append({"path": path, "line": line_no, "side": "RIGHT", "body": f"{tag}{message}"})
+
+    payload = {
+        "commit_id": os.environ["HEAD_SHA"],
+        "event": event_map[action],
+        "body": body,
+        "comments": comments,
+    }
+    with open(os.environ["OUTPUT_PATH"], "w") as fh:
+        json.dump(payload, fh)
+
+    with open(os.environ["RESULT_PATH"], "w") as fh:
+        fh.write(f"OK\n{action}\n{event_map[action]}\n{dropped}")
+except SystemExit:
+    raise
 except Exception as e:
-    fail(f"JSONのパースに失敗しました: {e}")
-
-if not isinstance(data, dict):
-    fail("JSONのトップレベルがオブジェクトではありません")
-
-action = data.get("action")
-body = data.get("body")
-findings = data.get("findings", [])
-
-event_map = {"approve": "APPROVE", "request-changes": "REQUEST_CHANGES", "comment": "COMMENT"}
-if action not in event_map:
-    fail(f"actionの値が不正です: {action!r}")
-if not isinstance(body, str) or not body.strip():
-    fail("bodyが空です")
-if not isinstance(findings, list):
-    findings = []
-
-diff_text = os.environ["PR_DIFF"]
-valid_lines = {}
-current_path = None
-new_line = None
-for line in diff_text.splitlines():
-    dm = re.match(r"^\+\+\+ (.+)$", line)
-    if dm:
-        target = dm.group(1)
-        if target == "/dev/null":
-            current_path = None
-        else:
-            current_path = re.sub(r"^b/", "", target)
-            valid_lines.setdefault(current_path, set())
-        new_line = None
-        continue
-    hm = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
-    if hm:
-        new_line = int(hm.group(1))
-        continue
-    if current_path is None or new_line is None:
-        continue
-    if line.startswith("+"):
-        valid_lines[current_path].add(new_line)
-        new_line += 1
-    elif line.startswith(" "):
-        valid_lines[current_path].add(new_line)
-        new_line += 1
-    elif line.startswith("-"):
-        pass
-    # "\\ No newline..." 等は行番号に影響しないため無視する
-
-comments = []
-dropped = 0
-for f in findings:
-    if not isinstance(f, dict):
-        dropped += 1
-        continue
-    path = f.get("file")
-    line_no = f.get("line")
-    severity = f.get("severity", "")
-    message = f.get("message", "")
-    if not path or not isinstance(line_no, int) or path not in valid_lines or line_no not in valid_lines[path]:
-        dropped += 1
-        continue
-    tag = f"**[{severity}]** " if severity else ""
-    comments.append({"path": path, "line": line_no, "side": "RIGHT", "body": f"{tag}{message}"})
-
-payload = {
-    "commit_id": os.environ["HEAD_SHA"],
-    "event": event_map[action],
-    "body": body,
-    "comments": comments,
-}
-with open(os.environ["OUTPUT_PATH"], "w") as fh:
-    json.dump(payload, fh)
-
-with open(os.environ["RESULT_PATH"], "w") as fh:
-    fh.write(f"OK\n{action}\n{event_map[action]}\n{dropped}")
+    fail(f"想定外のエラーが発生しました: {e}")
 '
 
 PARSE_STATUS="$(sed -n '1p' "$PARSE_RESULT_FILE")"
