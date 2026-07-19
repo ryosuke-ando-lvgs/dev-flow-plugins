@@ -29,10 +29,28 @@ git branch --show-current
 
 #### 既定: worktree を作成する（作業ディレクトリの明示指定がない場合）
 
-- `EnterWorktree` を `name: "<prefix>/<短い説明>"` で呼び、worktree＋ブランチを作成してセッションをそこへ移動する。
-  - prefix は変更種別に合わせる: `feat/` `fix/` `refactor/` `chore/` `docs/`。
-  - `EnterWorktree` は baseRef=fresh により `origin/<デフォルトブランチ>` から分岐するため、手動の `git checkout` / `git pull` は不要。
+**`EnterWorktree` 任せだとまれに worktree へ移動しないまま実装が進んでしまうことがある。必ず明示的な `git worktree` コマンドで作成し、入れたことを検証してから Step 2 に進む。**
+
+```bash
+# デフォルトブランチ名を取得して最新化
+base="$(git remote show origin | sed -n 's/.*HEAD branch: //p')"
+git fetch origin "$base"
+
+# 親リポジトリの隣に worktree を作成（例: ../<repo>-worktrees/<prefix>-<短い説明>）
+wt="../$(basename "$PWD")-worktrees/<prefix>-<短い説明>"
+mkdir -p "$(dirname "$wt")"
+git worktree add -b <prefix>/<短い説明> "$wt" "origin/$base"
+cd "$wt"
+
+# 入れたことを必ず検証する（想定パス/ブランチでなければ Step 2 に進まず中止して報告）
+git rev-parse --show-toplevel   # 期待する worktree パスと一致するか
+git branch --show-current       # 期待するブランチ名と一致するか
+```
+
+- prefix は変更種別に合わせる: `feat/` `fix/` `refactor/` `chore/` `docs/`。
+- 検証（`git rev-parse --show-toplevel` / `git branch --show-current`）の結果が想定と食い違う場合は、そのまま実装を進めず中止してユーザーに報告する。
 - worktree は依存が未インストールなので、`package.json` 等に依存変更があれば worktree 内で `npm install`（または `pnpm install`）を実行する。
+- `EnterWorktree` ツールは同等の操作を代行できるが、正本の手順は上記の明示 git コマンド＋検証とする（ツール実行後も検証コマンドは必ず実行する）。
 
 #### 例外: 通常ブランチを使う（作業ディレクトリ/ブランチ運用が明示された場合）
 
@@ -59,6 +77,7 @@ git checkout -b <prefix>/<短い説明>
 
 ## 注意事項
 - **既定は worktree を作成する。** 作業ディレクトリ/ブランチ運用の明示指定があるときのみ通常ブランチを使う。
+- worktree 作成は明示的な `git worktree add` コマンドで行い、`cd` 後に `git rev-parse --show-toplevel` / `git branch --show-current` で必ず検証する。検証がずれていたら実装に進まない。
 - `develop` / `main` への直接コミットは禁止。必ずブランチを切る。
 - 既に同名ブランチがあれば警告し別名を提案する。
 - 大きな仮定を置く前にユーザーへ確認する。

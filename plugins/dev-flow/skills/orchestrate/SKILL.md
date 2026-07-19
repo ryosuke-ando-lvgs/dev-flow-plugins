@@ -14,7 +14,7 @@ dev-flow の各スキルを順番に呼び出し、開発を一気通貫で進�
 
 1. **requirements** — 要件整理 → 要件メモ作成
 2. **plan** — 実装計画 → 計画メモ作成
-3. **implement** — 既定で worktree を作成して実装（作業ディレクトリ明示時は通常ブランチ）。plan(ExitPlanMode)後は既定で worktree に入る。
+3. **implement** — 既定で明示的な `git worktree add` コマンドでworktreeを作成し、`cd`後に`git rev-parse --show-toplevel`/`git branch --show-current`で入れたことを検証してから実装（作業ディレクトリ明示時は通常ブランチ）。plan(ExitPlanMode)後は既定で worktree に入る。
 4. **review** — ローカルdiffレビュー → 指摘対応
 5. **pretest** — lint/test/typecheck/build を green に
 6. （任意）分割コミットの整理
